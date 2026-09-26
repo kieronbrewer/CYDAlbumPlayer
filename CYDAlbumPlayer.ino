@@ -1955,9 +1955,12 @@ static void handleTouch() {
     screenMode = SCREEN_PLAYER;
     drawPlayer();
   } else { // SCREEN_PLAYER
-    // List: back to folders; playback continues
+    // List: back to top-level albums; playback continues
     if (ty >= PL_BACK_BTN_Y && ty < PL_BACK_BTN_Y + PL_BACK_BTN_H &&
         tx >= PL_BACK_BTN_X && tx < PL_BACK_BTN_X + PL_BACK_BTN_W) {
+      browseLevel = BROWSE_ALBUMS;
+      browseAlbumIdx = -1;
+      browseTrackScroll = 0;
       screenMode = SCREEN_BROWSER;
       drawBrowser();
       audioPumpPlayingMax(512);
