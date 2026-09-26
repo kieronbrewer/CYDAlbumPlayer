@@ -270,8 +270,228 @@ public:
   }
 };
 
+// ── FastAudioSourceSD: Instant ID3v2 skip + clean EOF + 4KB block cache ──
+class FastAudioSourceSD : public AudioFileSource {
+private:
+  File f;
+  uint32_t audioStartOffset = 0;
+  uint32_t audioEndOffset = 0;
+  uint32_t fileSize = 0;
+
+  // Internal RAM block buffer (4096 bytes) for fast multi-sector reads
+  static const size_t BUF_CAP = 4096;
+  uint8_t buf[BUF_CAP];
+  size_t bufPos = 0;
+  size_t bufLen = 0;
+  uint32_t bufFileOffset = 0;
+
+  void clearBuffer() {
+    bufPos = 0;
+    bufLen = 0;
+    bufFileOffset = 0;
+  }
+
+public:
+  FastAudioSourceSD() {
+    clearBuffer();
+  }
+
+  FastAudioSourceSD(const char* filename) {
+    clearBuffer();
+    open(filename);
+  }
+
+  virtual ~FastAudioSourceSD() override {
+    close();
+  }
+
+  virtual bool open(const char* filename) override {
+    close();
+    f = SD.open(filename, FILE_READ);
+    if (!f) return false;
+
+    fileSize = f.size();
+    audioStartOffset = 0;
+    audioEndOffset = fileSize;
+
+    // 1. Instantly parse and skip ID3v2 tag(s) at start of file
+    while (true) {
+      if (audioStartOffset + 10 > fileSize) break;
+      if (!f.seek(audioStartOffset)) break;
+      uint8_t hdr[10];
+      if (f.read(hdr, 10) != 10) break;
+
+      if (hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3' &&
+          hdr[3] < 0xFF && hdr[4] < 0xFF) {
+        uint32_t tagSize = ((uint32_t)(hdr[6] & 0x7F) << 21) |
+                           ((uint32_t)(hdr[7] & 0x7F) << 14) |
+                           ((uint32_t)(hdr[8] & 0x7F) << 7)  |
+                           ((uint32_t)(hdr[9] & 0x7F));
+        uint32_t total = 10 + tagSize;
+        if (hdr[5] & 0x10) total += 10; // ID3v2.4 footer present
+        audioStartOffset += total;
+        if (audioStartOffset >= fileSize) {
+          audioStartOffset = fileSize;
+          break;
+        }
+        continue;
+      }
+      break;
+    }
+
+    // 2. Scan for ID3v1 tag at EOF (128 bytes)
+    if (fileSize >= audioStartOffset + 128) {
+      if (f.seek(fileSize - 128)) {
+        uint8_t id3v1[3];
+        if (f.read(id3v1, 3) == 3 && id3v1[0] == 'T' && id3v1[1] == 'A' && id3v1[2] == 'G') {
+          audioEndOffset = fileSize - 128;
+        }
+      }
+    }
+
+    // 3. Scan for APE tag footer (32 bytes at audioEndOffset)
+    if (audioEndOffset >= audioStartOffset + 32) {
+      if (f.seek(audioEndOffset - 32)) {
+        uint8_t ape[32];
+        if (f.read(ape, 32) == 32 && memcmp(ape, "APETAGEX", 8) == 0) {
+          uint32_t apeSize = (uint32_t)ape[12] | ((uint32_t)ape[13] << 8) |
+                             ((uint32_t)ape[14] << 16) | ((uint32_t)ape[15] << 24);
+          if (audioEndOffset >= audioStartOffset + apeSize) {
+            audioEndOffset -= apeSize;
+          }
+        }
+      }
+    }
+
+    // Position file directly at start of audio frames
+    f.seek(audioStartOffset);
+    clearBuffer();
+    return true;
+  }
+
+  virtual bool close() override {
+    if (f) f.close();
+    clearBuffer();
+    audioStartOffset = 0;
+    audioEndOffset = 0;
+    fileSize = 0;
+    return true;
+  }
+
+  virtual bool isOpen() override {
+    return (bool)f;
+  }
+
+  virtual uint32_t getSize() override {
+    return (audioEndOffset >= audioStartOffset) ? (audioEndOffset - audioStartOffset) : 0;
+  }
+
+  virtual uint32_t getPos() override {
+    if (!f) return 0;
+    uint32_t cur = (bufLen > 0) ? (bufFileOffset + bufPos) : f.position();
+    return (cur >= audioStartOffset) ? (cur - audioStartOffset) : 0;
+  }
+
+  virtual uint32_t read(void *data, uint32_t len) override {
+    if (!f || len == 0) return 0;
+
+    uint8_t* out = reinterpret_cast<uint8_t*>(data);
+    uint32_t bytesRead = 0;
+
+    while (bytesRead < len) {
+      // 1. Serve from existing buffered data if available
+      if (bufPos < bufLen) {
+        size_t available = bufLen - bufPos;
+        size_t needed = len - bytesRead;
+        size_t take = (available < needed) ? available : needed;
+
+        uint32_t currentFilePos = bufFileOffset + bufPos;
+        if (currentFilePos >= audioEndOffset) {
+          break; // Stop at end of audio
+        }
+        if (currentFilePos + take > audioEndOffset) {
+          take = audioEndOffset - currentFilePos;
+        }
+        if (take == 0) break;
+
+        memcpy(out + bytesRead, buf + bufPos, take);
+        bufPos += take;
+        bytesRead += take;
+
+        if (bufFileOffset + bufPos >= audioEndOffset) {
+          break; // Hit EOF
+        }
+        continue;
+      }
+
+      // 2. Buffer is empty. Check if underlying file has reached audioEndOffset
+      uint32_t filePos = f.position();
+      if (filePos >= audioEndOffset) {
+        break; // Audio EOF reached
+      }
+
+      // 3. If caller wants a large chunk (>= BUF_CAP), read directly
+      size_t needed = len - bytesRead;
+      if (needed >= BUF_CAP) {
+        if (filePos + needed > audioEndOffset) {
+          needed = audioEndOffset - filePos;
+        }
+        if (needed == 0) break;
+        uint32_t r = f.read(out + bytesRead, needed);
+        bytesRead += r;
+        clearBuffer();
+        if (r < needed) break; // Physical EOF or read error
+        continue;
+      }
+
+      // 4. Refill internal buffer from SD in a 4KB block
+      bufFileOffset = filePos;
+      size_t toFetch = BUF_CAP;
+      if (bufFileOffset + toFetch > audioEndOffset) {
+        toFetch = audioEndOffset - bufFileOffset;
+      }
+      if (toFetch == 0) break;
+
+      uint32_t actual = f.read(buf, toFetch);
+      bufPos = 0;
+      bufLen = actual;
+      if (actual == 0) {
+        break; // Physical EOF
+      }
+    }
+
+    return bytesRead;
+  }
+
+  virtual bool seek(int32_t pos, int dir) override {
+    if (!f) return false;
+    clearBuffer();
+
+    int32_t target = 0;
+    if (dir == SEEK_SET) {
+      target = (int32_t)audioStartOffset + pos;
+    } else if (dir == SEEK_CUR) {
+      uint32_t cur = (bufLen > 0) ? (bufFileOffset + bufPos) : f.position();
+      target = (int32_t)cur + pos;
+    } else if (dir == SEEK_END) {
+      target = (int32_t)audioEndOffset + pos;
+    } else {
+      return false;
+    }
+
+    if (target < (int32_t)audioStartOffset) target = audioStartOffset;
+    if (target > (int32_t)audioEndOffset) target = audioEndOffset;
+
+    return f.seek(target);
+  }
+
+  uint32_t getSkippedId3Bytes() const { return audioStartOffset; }
+  uint32_t getSkippedEofBytes() const { return (fileSize > audioEndOffset) ? (fileSize - audioEndOffset) : 0; }
+  uint32_t getRawFileSize() const { return fileSize; }
+};
+
 static RingBufOutput* audioOut = nullptr;
-static AudioFileSourceSD* audioFile = nullptr;
+static FastAudioSourceSD* audioFile = nullptr;
 static AudioGeneratorMP3* mp3 = nullptr;
 static AudioGeneratorWAV* wav = nullptr;
 
@@ -725,14 +945,27 @@ static void startTrack(int orderIdx, bool gapless) {
   if (idx >= trackCount) idx = 0;
   currentTrack = idx;
 
+  unsigned long tStart = millis();
+
   stopTrack(!gapless);
 
   const char* path = playlist[currentTrack];
 
   setCurrentAlbumFromPath(path);
 
-  audioFile = new AudioFileSourceSD(path);
-  if (!audioFile) return;
+  audioFile = new FastAudioSourceSD(path);
+  if (!audioFile || !audioFile->isOpen()) {
+    if (audioFile) { delete audioFile; audioFile = nullptr; }
+    Serial.printf("[AUDIO] Failed to open: %s\n", path);
+    return;
+  }
+
+  Serial.printf("[AUDIO] Track %d/%d: %s (size %u, skip ID3 %u, skip EOF %u) opened in %lums\n",
+                currentTrack + 1, trackCount, path,
+                audioFile->getRawFileSize(),
+                audioFile->getSkippedId3Bytes(),
+                audioFile->getSkippedEofBytes(),
+                millis() - tStart);
 
   if (isWAV(path)) {
     wav = new AudioGeneratorWAV();
@@ -768,6 +1001,9 @@ static void startTrack(int orderIdx, bool gapless) {
     if (!ok) break;
     loops++;
   }
+
+  Serial.printf("[AUDIO] Playback started (rbAvail=%d, loops=%d) in total %lums\n",
+                (int)rbAvail(), loops, millis() - tStart);
 }
 
 static void nextTrack(bool gapless = false) {
@@ -1875,12 +2111,14 @@ void loop() {
       // loop() returned false = decoder finished/errored.
       // Explicitly stop so isRunning() becomes false, and the next phase waits for the buffer to drain.
       if (loopFailed) {
+        Serial.printf("[AUDIO] Decoder EOF reached. Ring buffer draining (%d samples remaining)...\n", (int)rbAvail());
         if (mp3 && mp3->isRunning()) mp3->stop();
         if (wav && wav->isRunning()) wav->stop();
       }
     } else {
       // Decoder stopped — wait for the ring buffer to drain before switching tracks with fewer glitches.
       if (rbAvail() < 200) {
+        Serial.printf("[AUDIO] Ring buffer drained (avail=%d). Triggering gapless nextTrack...\n", (int)rbAvail());
         nextTrack(true);
         if (screenMode == SCREEN_PLAYER && displayBacklightOn) drawPlayer();
       }
