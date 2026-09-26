@@ -1,234 +1,116 @@
-# Acknowledgements
+# CYD Album Player (CYD2USB & PlatformIO Edition)
 
-Special thanks to **Sparkadium** and the original project **[Cheap-Yellow-MP3-Player](https://github.com/Sparkadium/Cheap-Yellow-MP3-Player)** — it helped me get back to working on this project.
+> **Lineage & Acknowledgements:**
+> This repository is a fork of **[malaq88/CYDAlbumPlayer](https://github.com/malaq88/CYDAlbumPlayer)**, which was inspired by and built upon **[Sparkadium/Cheap-Yellow-MP3-Player](https://github.com/Sparkadium/Cheap-Yellow-MP3-Player)**.
+> All credit for the DAP-style user interface, spectrum analyzer, and audio pipeline belongs to **malaq88** and **Sparkadium**.
+> Huge thanks also to the library authors:
+> - **Phil Schatzmann** ([ESP32-A2DP](https://github.com/pschatzmann/ESP32-A2DP))
+> - **Earle Philhower** ([ESP8266Audio](https://github.com/earlephilhower/ESP8266Audio))
+> - **Bodmer** ([TFT_eSPI](https://github.com/Bodmer/TFT_eSPI))
+> - **Paul Stoffregen** ([XPT2046_Touchscreen](https://github.com/PaulStoffregen/XPT2046_Touchscreen))
 
-# CYD Album Player
+---
 
-**Language:** **English** | [Português (BR)](README.pt-BR.md)
+## What’s New in This Fork
 
-ESP32 “CYD” music player that:
-- Scans your SD card by albums (folders) and plays `.mp3` / `.wav` tracks.
-- Shows a **DAP-style player screen** (dark theme, status bar, **spectrum visualizer** — 16 frequency bars driven from the audio, progress bar, timestamps, technical line in cyan) plus volume **+/−** and touch transport controls.
-- Uses the **on-board RGB LED** on the back as a Bluetooth / playback indicator.
-- Acts as a **Bluetooth A2DP Source** (sends the audio to a Bluetooth speaker/headset).
-- **Bluetooth setup:** on boot, **scans nearby audio devices** and lets you **pick a speaker/headset from a touch list** (no fixed device name in code).
-- **Display power:** after **30 seconds** without touch, the **backlight turns off**; **touch is ignored** while off; the **BOOT** button (**GPIO 0**) **toggles** the backlight on or off (Bluetooth and playback keep running).
+This fork was created by **[Kieron Brewer](https://github.com/kieronbrewer)** to add native support for the newer **Dual-USB "CYD2USB" (ESP32-2432S028R V3)** board variant and enable seamless 1-command builds via PlatformIO:
+
+1. **Dual-USB (CYD2USB / ST7789) Display Support**:
+   - Configured out of the box for the **ST7789** display controller found on dual-port boards (USB-C + Micro-USB).
+   - Fixed the horizontal mirror issue (`TFT_MAD_MX` added to memory access control) so text and buttons render naturally from left to right.
+   - Resolved washed-out/inverted colors (`tft.invertDisplay(false)`) so the DAP dark theme renders with deep blacks and crisp white/accent fonts.
+2. **Dual-Pin Backlight Driving (GPIO 21 & GPIO 27)**:
+   - Early CYD boards wire backlight to GPIO 21; dual-USB revisions often wire it to GPIO 27. The firmware actively drives both pins HIGH, ensuring the screen illuminates regardless of hardware batch.
+3. **Tap-to-Wake & Extended 60s Timeout**:
+   - The screen can now be awakened with a **single tap on the touchscreen** (in addition to pressing the physical `BOOT` button on the back).
+   - Idle screen timeout extended from 30 seconds to **60 seconds** to allow ample time for Bluetooth pairing.
+4. **Native PlatformIO Build (`platformio.ini`)**:
+   - No need to manually copy `User_Setup.h` files into Arduino IDE library folders.
+   - Pre-configured `huge_app.csv` (3MB partition table) and locked library versions for a 1-click build:
+     ```bash
+     pio run -t upload
+     ```
+
+---
+
+## Overview
+
+An ESP32 "Cheap Yellow Display" (CYD) music player that:
+- Scans your microSD card by albums (folders) and plays `.mp3` / `.wav` tracks.
+- Features a **DAP-style player screen** (dark theme, status bar, **16-bar real-time spectrum visualizer**, progress bar, timestamps).
+- Acts as a **Bluetooth A2DP Source** to stream audio directly to Bluetooth headphones or speakers.
+- **Interactive Bluetooth Picker**: On boot, scans nearby Bluetooth audio sinks and lets you select your speaker/headset directly from the touchscreen.
+- Uses the **rear RGB LED** as a Bluetooth connection and playback status indicator.
+- **Power saving**: Backlight automatically sleeps after 60 seconds of inactivity; tap the screen or press the `BOOT` button (GPIO 0) to wake it up.
+
+---
 
 ## Screenshots
 
-Place these JPEGs in the **repository root** (same directory as `README.md`) when you push — the Markdown below references them **by filename**.
+| Album Browser | Playback Screen |
+|:---:|:---:|
+| ![Album browser](AlbumPlaylist.jpeg) | ![Playback screen](Execution_screen.jpeg) |
 
-| File | What it shows |
-|------|----------------|
-| **`AlbumPlaylist.jpeg`** | **Album browser:** folder list, **Player** button in the header (return to playback when tracks exist), **play** button on the path row (same action), **PREV/NEXT** paging, BT status in the header. |
-| **`Execution_screen.jpeg`** | **Playback screen:** spectrum (“SPECTRUM”) bars, track title, progress and times, album line, technical line, volume **−/+%/+**, transport controls, list icon (top-right). |
+---
 
-![Album browser — file: AlbumPlaylist.jpeg](AlbumPlaylist.jpeg)
+## Hardware Pinout (ESP32-2432S028R)
 
-![Playback screen — file: Execution_screen.jpeg](Execution_screen.jpeg)
+| Peripheral | Pins |
+| :--- | :--- |
+| **Display (ST7789 / HSPI)** | MOSI: `13`, MISO: `12`, SCLK: `14`, CS: `15`, DC: `2`, RST: `-1` |
+| **Backlight** | `GPIO 21` and `GPIO 27` (Active HIGH) |
+| **Touchscreen (XPT2046)** | MOSI: `32`, MISO: `39`, CLK: `25`, CS: `33`, IRQ: `36` |
+| **MicroSD (VSPI)** | CS: `5`, MOSI: `23`, MISO: `19`, SCK: `18` |
+| **Rear RGB LED** | Red: `4`, Green: `16`, Blue: `17` (Active LOW) |
+| **BOOT Button** | `GPIO 0` (Active LOW) |
 
-## RGB status LED (rear of CYD)
+---
 
-On typical **ESP32-2432S028R** boards, the rear RGB LED uses three GPIOs and is **active-low** (LOW = LED on):
+## Quick Start (PlatformIO)
 
-| Channel | GPIO |
-|--------|------|
-| Red    | 4    |
-| Green  | 16   |
-| Blue   | 17   |
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/kieronbrewer/CYDAlbumPlayer.git
+   cd CYDAlbumPlayer
+   ```
+2. Connect your CYD board via USB.
+3. Build and upload:
+   ```bash
+   pio run -t upload
+   ```
+4. (Optional) Open the serial monitor:
+   ```bash
+   pio device monitor -b 115200
+   ```
 
-**Behaviour in this sketch**
+---
 
-| State | LED pattern |
-|-------|-------------|
-| Bluetooth **not** connected (pairing / searching) | Alternating **red** and **blue** blink. |
-| Bluetooth connected and track **playing** | Alternating **green** and **blue** (one colour on at a time, ~450 ms). |
-| Bluetooth connected but **paused** / **stopped** | LED off. |
+## SD Card Organization
 
-At startup, while Bluetooth is scanning or pairing, the sketch runs the same LED update routine so the LED animates until a headset/speaker connects.
+1. Format your microSD card as **FAT32** (cards 64GB+ may require a formatting tool like GUIFormat).
+2. Organize your music into folders on the root directory. Each folder represents an **Album**:
 
-Clones may use different pins or polarity; adjust `RGB_LED_RED` / `RGB_LED_GREEN` / `RGB_LED_BLUE` in `CYDAlbumPlayer.ino` if needed.
-
-**Note (front “R21” / clear dome):** On many CYD boards, silkscreen **R21** is a **resistor** designator, not a separate software-driven LED. A clear component on the front is often the **LDR** (light sensor on GPIO 34) — it is read as an analog input, not toggled like the RGB LED.
-
-## Player UI (main playback screen)
-
-The playback view is laid out for a **240×320** portrait panel and is inspired by compact digital audio players (high contrast, minimal chrome).
-
-- **Top bar:** note icon, **track index / total**, **album folder name** (truncated), **BT** badge, **list icon** (top-right) to open the **album list** without stopping playback.
-- **Title line:** current track name (file name without extension), centered above the visualizer.
-- **Spectrum panel (“SPECTRUM”):** **16 vertical bars** that respond to the music. The sketch taps **mono samples** (L+R after volume gain) from the audio path, runs a **Hamming-windowed block** (256 samples) and **Goertzel** filters at fixed frequencies (~80 Hz–18 kHz). **Per-band AGC** and treble boost keep highs visible; MP3 assumes **44.1 kHz** sample rate for bin mapping (WAV uses the parsed rate). The bar area refreshes ~20×/s while the player screen is shown; bars decay when paused/stopped.
-- **Volume row:** **− / percentage / +** touch buttons (see `PL_VOLUME_Y`).
-- **Info block (updated ~every 450 ms while playing or paused):**
-  - Thin **progress bar** (red fill when duration is known).
-  - **Elapsed** and **total** time as `HH:MM:SS`; total shows `--:--:--` when duration is unknown.
-  - Folder line (dim text).
-  - **Cyan** technical line: **`WAV / sample-rate Hz / PCM`** when parsed from the file header, or **`MP3 / ~128 kbps (approx.)`** for MP3.
-
-**Timing**
-
-- Elapsed time respects **pause / resume** (wall-clock with accumulated pause duration).
-- **WAV** duration and sample rate come from parsing `fmt` / `data` chunks on the SD card.
-- **MP3** total length and bitrate are **estimated** from file size (assumes ~128 kbps CBR); VBR or unusual files may be off — the UI labels MP3 as estimated.
-
-**Touch targets**
-
-- **List icon** (top-right, `PL_BACK_BTN_*`) switches to the album browser; **playback continues** (pause/play state unchanged).
-- **Player** (browser header, when tracks exist) or the **play** button on the path row below: returns to the playback screen **without** restarting the track.
-- Tapping a **different album** in the list **stops the current decode briefly** before scanning the new folder on the SD card (avoids SPI/SD contention with MP3 streaming, which used to cause Bluetooth stutter). Then playback starts from track 1 of the new album. While browsing (list open), the sketch also **pumps the audio decoder** during TFT redraws and touch waits so the buffer stays fuller.
-- **Prev / Play–Pause / Next** are in the bottom transport bar (see `PL_TRANSPORT_Y` in the sketch).
-
-## Hardware / Pinout used by this sketch
-
-The pin mapping in this project is defined in `CYDAlbumPlayer.ino` and matches the included TFT configuration file (`Setup_User.h`).
-
-- SD card (SPI):
-  - `SD_CS = 5` (`#define SD_CS 5`)
-- TFT backlight:
-  - `TFT_BL = 21` (`#define TFT_BL 21`) — `HIGH` turns the backlight on in this sketch; `LOW` turns it off.
-- **BOOT** button (board tack switch used in firmware):
-  - `BOOT_BUTTON_PIN = 0` — read with `INPUT_PULLUP`; **pressed** = LOW. Used as a **debounced toggle** for the backlight (see **Display power & touch** below). **GPIO 0 is an ESP32 strapping pin:** if BOOT is held low while the chip **resets**, the module may enter **download / flash mode** instead of running your sketch; release BOOT and reset to boot normally.
-- Touch controller (XPT2046 on its own HSPI bus):
-  - `TOUCH_CLK = 25`
-  - `TOUCH_MISO = 39`
-  - `TOUCH_MOSI = 32`
-  - `TOUCH_CS = 33`
-  - `TOUCH_IRQ = 36`
-
-The TFT drawing and SPI TFT pins (TFT_MISO/TFT_MOSI/TFT_SCLK/TFT_CS/TFT_DC/…) are configured by TFT_eSPI using `Setup_User.h`.
-
-## TFT Setup (must match your exact CYD display variant)
-
-This repository includes a reference copy of the TFT_eSPI setup file as `Setup_User.h`.
-
-### 1) Install/use this setup in your TFT_eSPI library
-
-TFT_eSPI does not automatically read `Setup_User.h` from the project root. You must apply it to your TFT_eSPI installation.
-
-1. Open `Setup_User.h` (in this project).
-2. Copy its contents (or replace the file) into your TFT_eSPI library folder:
-   - `Documents/Arduino/libraries/TFT_eSPI/User_Setup.h`
-
-### 2) Select the correct display driver (critical)
-
-Your CYD boards come in multiple display controller variants. In `Setup_User.h`, choose exactly ONE driver:
-
-- `ILI9341_DRIVER` (v1 original, 1× Micro-USB)
-- `ILI9341_2_DRIVER` (v1 alternative controller, 1× Micro-USB)
-- `ST7789_2_DRIVER` (v2/v3 newer, USB-C + Micro)
-
-If the screen is blank/white:
-- Try `ILI9341_DRIVER` first (then switch to `ILI9341_2_DRIVER` if needed).
-- If your board has 2 USB ports (USB-C + Micro), use `ST7789_2_DRIVER`.
-
-### 3) Color order / inversion fixes (if colors look wrong)
-
-In `Setup_User.h`:
-- If colors have red/blue swapped, change `TFT_RGB_ORDER` (between `TFT_RGB` and `TFT_BGR`).
-- If you use `ST7789_2_DRIVER` and colors look washed/inverted, uncomment `TFT_INVERSION_ON`.
-
-### 4) Gamma tweak in the sketch
-
-`CYDAlbumPlayer.ino` applies a small gamma adjustment intended for the `ILI9341_2` driver:
-- `tft.writecommand(0x26); ...`
-
-If you switch your driver to something else (e.g., ST7789), and the colors look off, consider commenting out that gamma block or adjust it.
-
-## Bluetooth device selection (fixed name removed)
-
-**Update:** Bluetooth pairing no longer uses a hard-coded speaker name in the sketch. On each boot the player **scans for nearby audio devices** (A2DP sink class), **lists them on the touchscreen** (with signal strength), and you **tap the headset or speaker** you want. The UI proceeds to the SD music browser only **after** A2DP connects.
-
-Implementation notes:
-
-- Startup uses `BluetoothA2DPSource` with a **SSID / inquiry callback** to collect discovered devices and to accept the **address** of the one you tapped.
-- **Auto-reconnect is turned off** on boot and the **last saved peer is cleared** so the device always goes through the picker (you are not locked to one fixed name such as the old `"E6"` example).
-- Only devices that report a compatible **Class of Device** (audio/rendering, as filtered by ESP32-A2DP) appear in the list.
-
-After the **WELCOME** splash, you may see **“Preparing Bluetooth…”** briefly, then the picker screen (**“Bluetooth — pick speaker”**, **“Scanning…”**, **“Tap a device:”**). There can be a short delay before the first scan results while the stack initialises.
-
-## Display power & touch (backlight timeout, BOOT toggle)
-
-The sketch treats **“screen off”** as **backlight off** on **`TFT_BL` (GPIO 21)**. The TFT controller keeps its last image in memory; only the backlight is switched so playback and Bluetooth are **not** stopped.
-
-| Behaviour | Detail |
-|-----------|--------|
-| **Idle timeout** | If there is **no valid touchscreen interaction** for **`DISPLAY_IDLE_OFF_MS`** (default **30 seconds**, in `CYDAlbumPlayer.ino`), the backlight is driven **LOW** and the display looks off. |
-| **Touch while “off”** | **`handleTouch()`** and the **Bluetooth picker** handler **return immediately** when the backlight is off: the code does **not** read the touch controller for UI actions, so bumps on the panel do not change track, volume, or browser state. |
-| **BOOT button** | A **short press** on the **BOOT** switch (**GPIO 0**, debounced in software) **toggles** the backlight: **on → off** or **off → on**. When back on, the **album browser or player screen is redrawn** once so the UI matches the current state. |
-| **Automatic dim vs manual** | The same **BOOT** toggle works whether the backlight was turned off by the **idle timer** or by **pressing BOOT** while the screen was on. |
-| **While backlight is off** | **RGB LED** logic still runs. **A2DP** and **audio decode** keep running. **Progress bar** and **spectrum** updates are **skipped** (less SPI traffic while you cannot see the panel). |
-| **Bluetooth picker** | During startup pairing, **idle timeout** and **BOOT** still apply; **touch is ignored** if the backlight is off, so use **BOOT** to turn the panel on again if needed. |
-
-**Tuning:** change **`DISPLAY_IDLE_OFF_MS`** near the top of `CYDAlbumPlayer.ino` if you want a longer or shorter timeout.
-
-**Clone / hardware note:** Some CYD revisions wire the backlight differently (always on, or inverted logic). If **on/off** seems reversed, swap the **`HIGH`** / **`LOW`** levels used for **`TFT_BL`** in the sketch.
-
-## SD Card layout expected by this project
-
-The code expects:
-- Album = a folder under the SD card root (`/`)
-- Track files inside each album folder
-  - `.mp3`
-  - `.wav`
-
-The project ignores a known Windows folder:
-- `System Volume Information`
-
-**Track order inside an album:** files are sorted **alphabetically by full path** (e.g. `/Album/track01.mp3` before `/Album/track02.mp3`). No ID3/metadata is read for ordering.
-
-## Startup splash (optional high-quality logo)
-
-On boot, after the SD card is mounted, the sketch shows a **WELCOME** screen and either:
-
-1. **Your own logo** from the SD card, or  
-2. A **built-in procedural** GUARA CREW–style drawing (fallback).
-
-### Custom logo file (recommended for a perfect match)
-
-Place a **raw RGB565** file on the SD card root:
-
-- **Path:** `/guara565.raw` (exact name)
-- **Size:** exactly **200 × 218** pixels × 2 bytes = **87 200 bytes**
-- **Format:** row-major, **16-bit RGB565**, **little-endian** per pixel (standard for ESP/TFT_eSPI `pushImage`)
-
-If the file is missing or the size is wrong, the procedural logo is used instead.
-
-You can generate the file with a small Python script (resize your PNG first):
-
-```python
-from PIL import Image
-
-W, H = 200, 218
-img = Image.open("logo.png").convert("RGB").resize((W, H))
-out = bytearray()
-for y in range(H):
-    for x in range(W):
-        r, g, b = img.getpixel((x, y))
-        c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-        out += bytes((c & 0xFF, c >> 8))  # little-endian
-open("guara565.raw", "wb").write(out)
+```text
+SD Card Root (e.g. E:\)
+├── Pink Floyd - The Wall\
+│   ├── 01 - In the Flesh.mp3
+│   ├── 02 - The Thin Ice.mp3
+│   └── ...
+├── Daft Punk - Discovery\
+│   ├── 01 - One More Time.mp3
+│   └── ...
+└── guara565.raw  (Optional: 200x218 boot splash image)
 ```
 
-Copy `guara565.raw` to the root of the SD card.
+* **Supported Formats**: `.mp3` and `.wav` (up to 32 albums and 300 tracks).
+* Tracks inside an album play in alphabetical order by filename. Prefixing track numbers (`01 - `, `02 - `) preserves album track sequence.
 
-## Touch calibration (optional)
+---
 
-If touch points don’t match the buttons/menu areas, tune the calibration constants in `CYDAlbumPlayer.ino`:
-- `TS_MINX`, `TS_MAXX`, `TS_MINY`, `TS_MAXY`
+## RGB Status LED Behavior (Rear of CYD)
 
-## Libraries used (typical)
-
-You need these dependencies available in Arduino IDE:
-- `TFT_eSPI`
-- `XPT2046_Touchscreen`
-- `ESP32-A2DP` (Phil Schatzmann)
-- `ESP8266Audio` (provides `AudioFileSourceSD`, `AudioGeneratorMP3`, `AudioGeneratorWAV`, `AudioOutput`)
-
-## Build & upload
-
-1. Select your ESP32 board in Arduino IDE.
-2. Ensure TFT_eSPI is configured using the `Setup_User.h` reference.
-3. Compile and upload `CYDAlbumPlayer.ino`. On first run after upload, use the on-screen list to pick your Bluetooth speaker or headset.
-
-If you want, paste the last ~30 lines of your Arduino compile log (especially the first real `error:` if any) and I can help confirm board/driver configuration.
-
+| State | LED Pattern |
+| :--- | :--- |
+| **Bluetooth Scanning / Pairing** | Alternating **Red** and **Blue** blink |
+| **Connected & Playing** | Alternating **Green** and **Blue** (~450 ms) |
+| **Connected & Paused / Stopped** | LED Off |
