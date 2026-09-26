@@ -13,7 +13,7 @@
 
 ## What’s New in This Fork
 
-This fork was created by **[Kieron Brewer](https://github.com/kieronbrewer)** to add native support for the newer **Dual-USB "CYD2USB" (ESP32-2432S028R V3)** board variant and enable seamless 1-command builds via PlatformIO:
+This fork was created by **[Kieron Brewer](https://github.com/kieronbrewer) although mostly completed by prompting Google's Antigravity tool which wrote the code. ** The work was done to add native support for the newer **Dual-USB "CYD2USB" (ESP32-2432S028R V3)** board variant and enable seamless 1-command builds via PlatformIO:
 
 1. **Dual-USB (CYD2USB / ST7789) Display Support**:
    - Configured out of the box for the **ST7789** display controller found on dual-port boards (USB-C + Micro-USB).
