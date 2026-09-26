@@ -26,6 +26,7 @@
 #define TOUCH_CS   33
 #define TOUCH_IRQ  36
 #define TFT_BL     21
+#define TFT_BL_ALT 27
 /** CYD BOOT (strapping pin — avoid holding at chip reset). Active LOW when pressed. */
 #define BOOT_BUTTON_PIN 0
 
@@ -86,7 +87,7 @@ static unsigned long lastTouchTime = 0;
 static const unsigned long TOUCH_DEBOUNCE_MS = 220;
 
 // ── Display backlight idle timeout ────────────────────────
-static const unsigned long DISPLAY_IDLE_OFF_MS = 30000;
+static const unsigned long DISPLAY_IDLE_OFF_MS = 60000;
 static bool                displayBacklightOn     = true;
 static unsigned long       lastUserActivityMs     = 0;
 /** 0 idle, 1 debouncing down, 2 latched until release */
@@ -106,9 +107,11 @@ static void noteUserActivity() {
 static void toggleBacklightWithBoot() {
   if (displayBacklightOn) {
     digitalWrite(TFT_BL, LOW);
+    digitalWrite(TFT_BL_ALT, LOW);
     displayBacklightOn = false;
   } else {
     digitalWrite(TFT_BL, HIGH);
+    digitalWrite(TFT_BL_ALT, HIGH);
     displayBacklightOn = true;
     lastUserActivityMs = millis();
     if (mainPlayerUiReady) displayWakeNeedsRedraw = true;
@@ -119,6 +122,7 @@ static void updateDisplayBacklightTimeout() {
   if (!displayBacklightOn) return;
   if (millis() - lastUserActivityMs >= DISPLAY_IDLE_OFF_MS) {
     digitalWrite(TFT_BL, LOW);
+    digitalWrite(TFT_BL_ALT, LOW);
     displayBacklightOn = false;
   }
 }
@@ -1475,7 +1479,18 @@ static void drawBluetoothPicker(bool connecting) {
 }
 
 static void handleBluetoothPickerTouch(bool* redraw) {
-  if (!displayBacklightOn) return;
+  if (!displayBacklightOn) {
+    if (ts.touched()) {
+      digitalWrite(TFT_BL, HIGH);
+      digitalWrite(TFT_BL_ALT, HIGH);
+      displayBacklightOn = true;
+      lastUserActivityMs = millis();
+      while (ts.touched()) delay(10);
+      lastTouchTime = millis();
+      if (redraw) *redraw = true;
+    }
+    return;
+  }
 
   int16_t tx, ty;
   if (!getTouchXY(tx, ty)) return;
@@ -1594,7 +1609,18 @@ static void runBluetoothPickerUntilConnected() {
 }
 
 static void handleTouch() {
-  if (!displayBacklightOn) return;
+  if (!displayBacklightOn) {
+    if (ts.touched()) {
+      digitalWrite(TFT_BL, HIGH);
+      digitalWrite(TFT_BL_ALT, HIGH);
+      displayBacklightOn = true;
+      lastUserActivityMs = millis();
+      if (mainPlayerUiReady) displayWakeNeedsRedraw = true;
+      while (ts.touched()) delay(10);
+      lastTouchTime = millis();
+    }
+    return;
+  }
 
   int16_t tx, ty;
   if (!getTouchXY(tx, ty)) return;
@@ -1737,18 +1763,16 @@ void setup() {
 
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
+  pinMode(TFT_BL_ALT, OUTPUT);
+  digitalWrite(TFT_BL_ALT, HIGH);
 
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
 
   tft.init();
-  // "Gamma" adjustment for the ILI9341_2 (some CYD boards have washed-out colors)
-  // Reported common sequence to improve quality after inversion/initial gamma.
-  tft.writecommand(0x26); // ILI9341_GAMMASET
-  tft.writedata(2);
-  delay(120);
-  tft.writecommand(0x26);
-  tft.writedata(1);
   tft.setRotation(0);
+  tft.writecommand(TFT_MADCTL);
+  tft.writedata(TFT_MAD_MX | TFT_MAD_COLOR_ORDER);
+  tft.invertDisplay(false);
   tft.fillScreen(COL_BG);
 
   SPI.begin();
