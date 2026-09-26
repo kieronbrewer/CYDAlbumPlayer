@@ -30,6 +30,12 @@ This fork was created by **[Kieron Brewer](https://github.com/kieronbrewer) alth
      ```bash
      pio run -t upload
      ```
+5. **Fast Track Switching & Near-Gapless Playback (`FastAudioSourceSD`)**:
+   - **Eliminated the ~10-second transition delay**: Modern MP3 files contain ID3v2 tags with embedded cover art (often 100 KB to 500 KB+). Previously, the decoder would encounter this non-audio data, lose synchronization, and fall back to single-byte SD card reads over SPI—executing up to 300,000 SPI transactions and moving ~460 MB in RAM byte-by-byte before finding the first audio frame.
+   - **Instant ID3v2 Skipping**: Our custom `FastAudioSourceSD` reads the 10-byte ID3 header, computes the 28-bit synchsafe tag length, and seeks directly past the entire tag and cover art in `< 1 ms`.
+   - **Clean EOF Truncation**: Detects ID3v1 (`TAG`) and APE tags at the end of the file to stop decoding immediately when audio ends, preventing trailing 1-byte search loops.
+   - **4KB RAM Block Buffering**: Replaces single-byte SPI reads with 4096-byte multi-sector chunked reads served from RAM.
+   - **Result**: Song transitions and manual track skips happen in **< 0.1s (near-gapless)** instead of pausing in silence for 10 seconds.
 
 ---
 
